@@ -1,0 +1,10 @@
+{
+    "auto_session_warning_enabled": true,
+    "auto_session_warning_threshold": 2,
+    "auto_session_warning_target": "",
+    "api_host": "127.0.0.1",
+    "api_port": 9011,
+    "api_path_prefix": "/VXAPI",
+    "session_duration_hours": 72,
+    "check_interval_hours": 2
+}
