@@ -34,9 +34,9 @@
 ```
 📋 配置信息:
    API服务器: 127.0.0.1:9011/VXAPI
-   登录微信ID: wxid_81d3txu5su5n22
-   设备ID: 492e1c38b3fb58dfb74b5f9cba6f382d
-   预警接收者: wxid_wf0hp6z51jh221
+   登录微信ID: 机器人wxid
+   设备ID: 你的设备id
+   预警接收者: 管理员wxid
    预警状态: 已启用
    预警阈值: 2小时
 ```
@@ -75,7 +75,7 @@
 {
     "auto_session_warning_enabled": true,
     "auto_session_warning_threshold": 2,
-    "auto_session_warning_target": "wxid_wf0hp6z51jh221",
+    "auto_session_warning_target": "管理员wxid",
     "api_host": "127.0.0.1",
     "api_port": 9011,
     "api_path_prefix": "/VXAPI",
