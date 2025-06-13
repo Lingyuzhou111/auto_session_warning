@@ -133,10 +133,14 @@ class AutoSessionWarningPlugin(Plugin):
             e_context.action = EventAction.BREAK_PASS
             
         elif content == "$预警测试":
-            reply = self._handle_warning_test(msg)
+            reply = self._handle_warning_test(msg, force_logout=False)
             e_context["reply"] = reply
             e_context.action = EventAction.BREAK_PASS
             
+        elif content == "$断线重连":
+            reply = self._handle_warning_test(msg, force_logout=True)
+            e_context["reply"] = reply
+            e_context.action = EventAction.BREAK_PASS
 
     
     def _handle_status_query(self) -> Reply:
@@ -320,7 +324,7 @@ class AutoSessionWarningPlugin(Plugin):
             reply.content = f"❌ 设置阈值失败: {str(e)}"
             return reply
     
-    def _handle_warning_test(self, msg) -> Reply:
+    def _handle_warning_test(self, msg, force_logout: bool = False) -> Reply:
         """处理预警测试"""
         try:
             # 获取当前登录信息
@@ -348,19 +352,35 @@ class AutoSessionWarningPlugin(Plugin):
             # 计算预计掉线时间
             remaining_hours = self.session_duration_hours - online_hours
             
-            # 构建测试消息
-            test_message = (
-                f"⚠️ 掉线预警测试\n"
-                f"您已持续在线超过{online_hours:.0f}小时，"
-                f"预计{remaining_hours:.0f}小时内即将掉线。\n"
-                f"为避免服务中断，请手动扫码重新登录！"
-                f"稍后将为您发送登录二维码。"
-            )
+            # 根据测试模式构建不同的消息
+            if force_logout:
+                test_message = (
+                    f"⚠️ 掉线预警强制测试\n"
+                    f"您已持续在线超过{online_hours:.0f}小时，"
+                    f"预计{remaining_hours:.0f}小时内即将掉线。\n\n"
+                    f"🔴 强制测试模式：\n"
+                    f"1. 先强制退出当前登录\n"
+                    f"2. 然后发送新的登录二维码\n"
+                    f"3. 扫码后将更新登录时间戳\n\n"
+                    f"⚠️ 注意：此操作会中断当前会话！\n"
+                    f"稍后将为您发送登录二维码，请准备扫码重新登录！"
+                )
+            else:
+                test_message = (
+                    f"⚠️ 掉线预警测试\n"
+                    f"您已持续在线超过{online_hours:.0f}小时，"
+                    f"预计{remaining_hours:.0f}小时内即将掉线。\n\n"
+                    f"🟡 普通测试模式：\n"
+                    f"1. 直接发送登录二维码\n"
+                    f"2. 如果账号未掉线，扫码可能不会更新时间戳\n"
+                    f"3. 如需确保更新时间戳，请使用强制测试模式\n\n"
+                    f"稍后将为您发送登录二维码。"
+                )
             
-            # 启动异步任务发送二维码
+            # 启动异步任务
             target_wxid = msg.from_user_id if hasattr(msg, 'from_user_id') else msg.sender_wxid
             threading.Thread(
-                target=lambda: asyncio.run(self._send_qr_code_after_delay(target_wxid))
+                target=lambda: asyncio.run(self._force_logout_and_send_qr(target_wxid, force_logout))
             ).start()
             
             reply = Reply()
@@ -376,7 +396,88 @@ class AutoSessionWarningPlugin(Plugin):
             reply.content = f"❌ 预警测试失败: {str(e)}"
             return reply
     
+    async def _force_logout_and_send_qr(self, to_wxid: str, force_logout: bool = False):
+        """根据模式执行测试（异步）"""
+        try:
+            if force_logout:
+                # 强制测试模式：先退出登录，再发送二维码
+                logger.info(f"[AutoSessionWarning] 执行强制测试模式")
+                
+                # 第1步：强制退出当前登录
+                logout_success = await self._force_logout()
+                if logout_success:
+                    logger.info(f"[AutoSessionWarning] 强制退出登录成功")
+                    await self._send_text_message(to_wxid, "✅ 已强制退出当前登录，正在生成新的登录二维码...")
+                else:
+                    logger.warning(f"[AutoSessionWarning] 强制退出登录失败，继续发送二维码")
+                    await self._send_text_message(to_wxid, "⚠️ 退出登录失败，但仍将发送登录二维码...")
+                
+                # 等待2秒确保退出完成
+                await asyncio.sleep(2)
+                
+                # 第2步：生成并发送二维码
+                success = await self._send_login_qr_code(to_wxid)
+                if success:
+                    logger.info(f"[AutoSessionWarning] 强制测试二维码发送成功: {to_wxid}")
+                    await self._send_text_message(to_wxid, "📱 登录二维码已发送，请扫码登录以更新时间戳！")
+                else:
+                    logger.error(f"[AutoSessionWarning] 强制测试二维码发送失败: {to_wxid}")
+                    await self._send_text_message(to_wxid, "❌ 二维码发送失败，请手动重新登录！")
+            else:
+                # 普通测试模式：直接发送二维码
+                logger.info(f"[AutoSessionWarning] 执行普通测试模式")
+                
+                # 等待1秒
+                await asyncio.sleep(1)
+                
+                # 直接生成并发送二维码
+                success = await self._send_login_qr_code(to_wxid)
+                if success:
+                    logger.info(f"[AutoSessionWarning] 普通测试二维码发送成功: {to_wxid}")
+                    await self._send_text_message(to_wxid, "📱 登录二维码已发送。注意：如果账号未掉线，扫码可能不会更新时间戳。")
+                else:
+                    logger.error(f"[AutoSessionWarning] 普通测试二维码发送失败: {to_wxid}")
+                    await self._send_text_message(to_wxid, "❌ 二维码发送失败，请重试或使用强制测试模式！")
+                
+        except Exception as e:
+            logger.error(f"[AutoSessionWarning] 测试执行失败: {e}")
+            await self._send_text_message(to_wxid, f"❌ 操作失败: {str(e)}")
 
+    async def _force_logout(self) -> bool:
+        """强制退出当前登录"""
+        try:
+            if not self.current_wxid:
+                logger.warning("[AutoSessionWarning] 无当前wxid，无法退出登录")
+                return False
+            
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.base_url}/Login/Logout"
+                json_param = {
+                    "wxid": self.current_wxid,
+                    "Wxid": self.current_wxid  # 提供兼容性
+                }
+                
+                logger.info(f"[AutoSessionWarning] 正在强制退出登录: {self.current_wxid}")
+                
+                async with session.post(url, json=json_param, timeout=10) as response:
+                    if response.status != 200:
+                        logger.error(f"[AutoSessionWarning] 退出登录HTTP失败: {response.status}")
+                        return False
+                    
+                    result = await response.json()
+                    success = result.get("Success", False)
+                    
+                    if success:
+                        logger.info(f"[AutoSessionWarning] 强制退出登录成功: {self.current_wxid}")
+                        return True
+                    else:
+                        error_msg = result.get("Message", "未知错误")
+                        logger.error(f"[AutoSessionWarning] 强制退出登录失败: {error_msg}")
+                        return False
+                        
+        except Exception as e:
+            logger.error(f"[AutoSessionWarning] 强制退出登录异常: {e}")
+            return False
     
     async def _send_qr_code_after_delay(self, to_wxid: str):
         """延迟发送二维码（异步）"""
@@ -762,7 +863,11 @@ class AutoSessionWarningPlugin(Plugin):
             "• $预警启用 - 开启自动掉线预警功能\n"
             "• $预警禁用 - 关闭自动掉线预警功能\n"
             "• $预警阈值 xh - 设置预警阈值（如：$预警阈值 2h）\n"
-            "• $预警测试 - 手动进行掉线预警测试\n\n"
+            "• $预警测试 - 手动进行掉线预警测试（普通模式）\n"
+            "• $断线重连 - 强制进行断线重连测试（确保更新时间戳）\n\n"
+            "测试模式说明：\n"
+            "- 普通测试：直接发送二维码，如果账号未掉线，扫码可能不会更新时间戳\n"
+            "- 强制测试：先强制退出登录，再发送二维码，确保扫码后更新时间戳\n\n"
             "功能说明：\n"
             "- 自动监控微信登录状态\n"
             "- 在即将掉线前自动发送预警\n"
